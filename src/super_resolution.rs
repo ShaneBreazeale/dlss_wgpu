@@ -43,6 +43,7 @@ impl DlssSuperResolution {
         let mut min_render_resolution = [0, 0];
         let mut max_render_resolution = [0, 0];
         unsafe {
+            apply_super_resolution_render_preset(locked_sdk.parameters);
             let mut deprecated_sharpness = 0.0f32;
             check_ngx_result(NGX_DLSS_GET_OPTIMAL_SETTINGS(
                 locked_sdk.parameters,

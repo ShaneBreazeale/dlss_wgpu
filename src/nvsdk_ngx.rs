@@ -22,7 +22,81 @@ type VkPhysicalDevice = ash::vk::PhysicalDevice;
 use ash::vk::{
     ImageAspectFlags, ImageSubresourceRange, REMAINING_ARRAY_LAYERS, REMAINING_MIP_LEVELS,
 };
+use std::sync::atomic::{AtomicU32, Ordering};
 use wgpu::{Adapter, TextureUsages, TextureView, wgc::api::Vulkan};
+
+/// DLSS Super Resolution render preset (`NVSDK_NGX_DLSS_Hint_Render_Preset`): which trained
+/// model DLSS runs. See the "Render Presets" section of the DLSS programming guide.
+///
+/// Applied to every [`crate::super_resolution::DlssSuperResolution`] created after
+/// [`set_super_resolution_render_preset`]; an existing context keeps the preset it was
+/// created with.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+pub enum DlssRenderPreset {
+    /// Let DLSS pick per quality mode (may change with driver / OTA updates).
+    #[default]
+    Default,
+    /// Similar to K; may show slightly less ghosting at the cost of extra flickering.
+    J,
+    /// Transformer model, the SDK default for DLAA / Quality / Balanced.
+    K,
+    /// The SDK default for Ultra Performance.
+    L,
+    /// The SDK default for Performance.
+    M,
+}
+
+impl DlssRenderPreset {
+    // The C enum is u32 on Linux and i32 on Windows.
+    #[allow(clippy::unnecessary_cast)]
+    pub(crate) fn as_ngx_value(self) -> u32 {
+        (match self {
+            Self::Default => {
+                NVSDK_NGX_DLSS_Hint_Render_Preset_NVSDK_NGX_DLSS_Hint_Render_Preset_Default
+            }
+            Self::J => NVSDK_NGX_DLSS_Hint_Render_Preset_NVSDK_NGX_DLSS_Hint_Render_Preset_J,
+            Self::K => NVSDK_NGX_DLSS_Hint_Render_Preset_NVSDK_NGX_DLSS_Hint_Render_Preset_K,
+            Self::L => NVSDK_NGX_DLSS_Hint_Render_Preset_NVSDK_NGX_DLSS_Hint_Render_Preset_L,
+            Self::M => NVSDK_NGX_DLSS_Hint_Render_Preset_NVSDK_NGX_DLSS_Hint_Render_Preset_M,
+        }) as u32
+    }
+
+    fn from_ngx_value(value: u32) -> Self {
+        [Self::J, Self::K, Self::L, Self::M]
+            .into_iter()
+            .find(|preset| preset.as_ngx_value() == value)
+            .unwrap_or(Self::Default)
+    }
+}
+
+static SUPER_RESOLUTION_RENDER_PRESET: AtomicU32 = AtomicU32::new(0);
+
+/// Sets the DLSS Super Resolution render preset hint for every quality mode, process-wide.
+///
+/// Takes effect for contexts created afterwards.
+pub fn set_super_resolution_render_preset(preset: DlssRenderPreset) {
+    SUPER_RESOLUTION_RENDER_PRESET.store(preset.as_ngx_value(), Ordering::Relaxed);
+}
+
+/// The render preset hint set by [`set_super_resolution_render_preset`].
+pub fn super_resolution_render_preset() -> DlssRenderPreset {
+    DlssRenderPreset::from_ngx_value(SUPER_RESOLUTION_RENDER_PRESET.load(Ordering::Relaxed))
+}
+
+/// Writes the render preset hint for every quality mode into `parameters`.
+pub(crate) unsafe fn apply_super_resolution_render_preset(parameters: *mut NVSDK_NGX_Parameter) {
+    let value = SUPER_RESOLUTION_RENDER_PRESET.load(Ordering::Relaxed);
+    for name in [
+        NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA.as_slice(),
+        NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality.as_slice(),
+        NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced.as_slice(),
+        NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance.as_slice(),
+        NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance.as_slice(),
+        NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality.as_slice(),
+    ] {
+        unsafe { NVSDK_NGX_Parameter_SetUI(parameters, name.as_ptr().cast(), value) };
+    }
+}
 
 /// How much DLSS should upscale by.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
