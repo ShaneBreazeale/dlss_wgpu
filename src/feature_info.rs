@@ -26,11 +26,18 @@ where
             Length: shared_library_paths.len() as u32,
         },
         InternalData: ptr::null_mut(),
-        // TODO: Allow configuring logging
-        LoggingInfo: NVSDK_NGX_LoggingInfo {
-            LoggingCallback: None,
-            MinimumLoggingLevel: NVSDK_NGX_Logging_Level_NVSDK_NGX_LOGGING_LEVEL_OFF,
-            DisableOtherLoggingSinks: false,
+        // `DLSS_WGPU_NGX_LOG=1` (or `verbose`) pipes NGX's own log to stderr.
+        LoggingInfo: match ngx_log_level() {
+            Some(level) => NVSDK_NGX_LoggingInfo {
+                LoggingCallback: Some(ngx_log_to_stderr),
+                MinimumLoggingLevel: level,
+                DisableOtherLoggingSinks: true,
+            },
+            None => NVSDK_NGX_LoggingInfo {
+                LoggingCallback: None,
+                MinimumLoggingLevel: NVSDK_NGX_Logging_Level_NVSDK_NGX_LOGGING_LEVEL_OFF,
+                DisableOtherLoggingSinks: false,
+            },
         },
     };
 
@@ -52,6 +59,29 @@ where
     };
 
     (callback)(&feature_info)
+}
+
+/// NGX log level requested with the `DLSS_WGPU_NGX_LOG` environment variable
+/// (`1` / `on`, or `verbose`); `None` keeps NGX logging off.
+fn ngx_log_level() -> Option<NVSDK_NGX_Logging_Level> {
+    match var("DLSS_WGPU_NGX_LOG").ok()?.trim() {
+        "" | "0" | "off" => None,
+        "verbose" | "2" => Some(NVSDK_NGX_Logging_Level_NVSDK_NGX_LOGGING_LEVEL_VERBOSE),
+        _ => Some(NVSDK_NGX_Logging_Level_NVSDK_NGX_LOGGING_LEVEL_ON),
+    }
+}
+
+/// NGX log callback: may be called from any thread, `message` is only valid during the call.
+unsafe extern "C" fn ngx_log_to_stderr(
+    message: *const std::ffi::c_char,
+    _level: NVSDK_NGX_Logging_Level,
+    _source: NVSDK_NGX_Feature,
+) {
+    if message.is_null() {
+        return;
+    }
+    let message = unsafe { std::ffi::CStr::from_ptr(message) }.to_string_lossy();
+    eprintln!("[ngx] {}", message.trim_end());
 }
 
 fn get_shared_library_paths() -> Vec<Vec<wchar_t>> {
